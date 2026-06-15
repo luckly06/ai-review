@@ -3,6 +3,7 @@
 // 2) 调 minimax API 拿审查意见
 // 3) post 评论到 PR
 import https from 'node:https';
+import { execSync } from 'node:child_process';
 
 const {
   MINIMAX_API_KEY,
@@ -20,7 +21,6 @@ function fail(msg, err) {
 }
 
 function readDiff() {
-  const { execSync } = require('node:child_process');
   try {
     const diff = execSync(
       `git fetch origin ${BASE_REF} --depth=1 && git diff origin/${BASE_REF}...HEAD`,
