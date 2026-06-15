@@ -1,0 +1,12 @@
+{
+  "name": "ai-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "测试仓库 - 跑 GitHub Actions AI 审查流水线",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"no tests yet\""
+  }
+}
