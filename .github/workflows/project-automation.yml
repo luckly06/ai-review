@@ -111,7 +111,7 @@ jobs:
               console.log("Added to project: " + itemId);
             }
 
-            const fieldData = await graphql("query($p:ID!,$f:ID!){node(id:$p){...on ProjectV2{field(id:$f){...on ProjectV2SingleSelectField{options{id name}}}}}}", { p: PROJECT_ID, f: STATUS_FIELD_ID });
+            const fieldData = await graphql("query($p:ID!){node(id:$p){...on ProjectV2{field(name:\"Status\"){...on ProjectV2SingleSelectField{options{id name}}}}}}", { p: PROJECT_ID });
             const option = fieldData.node.field.options.find(o => o.name === targetStatus);
             if (!option) throw new Error("Status option not found: " + targetStatus);
 
