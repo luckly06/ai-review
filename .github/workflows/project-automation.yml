@@ -1,0 +1,123 @@
+name: Project Board Automation
+
+on:
+  issues:
+    types: [opened, assigned, closed, reopened]
+  pull_request:
+    types: [opened, ready_for_review, review_requested, closed, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+  repository-projects: write
+
+jobs:
+  automate-project-card:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Move Card on Board
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT_ID: ${{ secrets.PROJECT_ID }}
+          STATUS_FIELD_ID: ${{ secrets.STATUS_FIELD_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || '' }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          node -e '
+          const https = require("https");
+          const {
+            GH_TOKEN, PROJECT_ID, STATUS_FIELD_ID,
+            EVENT_NAME, EVENT_ACTION, REPO,
+            ISSUE_NUMBER, PR_NUMBER, IS_PR
+          } = process.env;
+
+          function getTargetStatus() {
+            const isPR = IS_PR === "true";
+            const action = EVENT_ACTION;
+            if (isPR) {
+              switch (action) {
+                case "opened": case "reopened": return "In progress";
+                case "ready_for_review": case "review_requested": return "In review";
+                case "closed": return "Done";
+                default: return null;
+              }
+            } else {
+              switch (action) {
+                case "opened": case "reopened": return "Backlog";
+                case "assigned": return "Ready";
+                case "closed": return "Done";
+                default: return null;
+              }
+            }
+          }
+
+          function graphql(query, variables = {}) {
+            const body = JSON.stringify({ query, variables });
+            return new Promise((resolve, reject) => {
+              const req = https.request({
+                hostname: "api.github.com", port: 443, path: "/graphql", method: "POST",
+                headers: {
+                  "Content-Type": "application/json", "User-Agent": "project-automation",
+                  Authorization: "Bearer " + GH_TOKEN,
+                },
+              }, (res) => {
+                let chunks = "";
+                res.on("data", (c) => (chunks += c));
+                res.on("end", () => {
+                  if (res.statusCode !== 200) return reject(new Error("HTTP " + res.statusCode + ": " + chunks));
+                  try {
+                    const json = JSON.parse(chunks);
+                    if (json.errors) return reject(new Error("GraphQL: " + JSON.stringify(json.errors)));
+                    resolve(json.data);
+                  } catch (e) { reject(e); }
+                });
+              });
+              req.on("error", reject);
+              req.write(body);
+              req.end();
+            });
+          }
+
+          (async () => {
+            const targetStatus = getTargetStatus();
+            if (!targetStatus) { console.log("No action needed for " + EVENT_NAME + "." + EVENT_ACTION); return; }
+            console.log(EVENT_NAME + "." + EVENT_ACTION + " -> " + targetStatus);
+
+            const [owner, repo] = REPO.split("/");
+            const number = parseInt(IS_PR === "true" ? PR_NUMBER : ISSUE_NUMBER);
+            if (!number) { console.error("No issue/PR number"); process.exit(1); }
+
+            const isPR = IS_PR === "true";
+            const qData = await graphql(
+              isPR
+                ? "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){id}}}"
+                : "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id}}}",
+              { o: owner, r: repo, n: number }
+            );
+            const contentId = isPR ? qData.repository.pullRequest.id : qData.repository.issue.id;
+
+            let itemId;
+            const items = await graphql("query($p:ID!){node(id:$p){...on ProjectV2{items(first:100){nodes{id content{...on Issue{id}...on PullRequest{id}}}}}}}", { p: PROJECT_ID });
+            const found = items.node.items.nodes.find(i => i.content && i.content.id === contentId);
+            if (found) {
+              itemId = found.id;
+            } else {
+              const addResult = await graphql("mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}", { p: PROJECT_ID, c: contentId });
+              itemId = addResult.addProjectV2ItemById.item.id;
+              console.log("Added to project: " + itemId);
+            }
+
+            const fieldData = await graphql("query($p:ID!,$f:ID!){node(id:$p){...on ProjectV2{field(id:$f){...on ProjectV2SingleSelectField{options{id name}}}}}}", { p: PROJECT_ID, f: STATUS_FIELD_ID });
+            const option = fieldData.node.field.options.find(o => o.name === targetStatus);
+            if (!option) throw new Error("Status option not found: " + targetStatus);
+
+            await graphql("mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}", {
+              p: PROJECT_ID, i: itemId, f: STATUS_FIELD_ID, o: option.id,
+            });
+            console.log("Card moved to: " + targetStatus);
+          })().catch(e => { console.error("Failed:", e.message); process.exit(1); });
+          '
