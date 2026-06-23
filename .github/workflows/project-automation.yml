@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Move Card on Board
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
           PROJECT_ID: ${{ secrets.PROJECT_ID }}
           STATUS_FIELD_ID: ${{ secrets.STATUS_FIELD_ID }}
           EVENT_NAME: ${{ github.event_name }}
