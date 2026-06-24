@@ -1,0 +1,138 @@
+name: Notify Feishu
+
+on:
+  push:
+    branches: [main]
+  issues:
+    types: [opened, closed]
+  pull_request:
+    types: [opened, closed, ready_for_review]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Feishu notification
+        env:
+          FEISHU_GITHUB_BOT_APP_ID: ${{ secrets.FEISHU_GITHUB_BOT_APP_ID }}
+          FEISHU_GITHUB_BOT_APP_SECRET: ${{ secrets.FEISHU_GITHUB_BOT_APP_SECRET }}
+          FEISHU_GITHUB_BOT_CHAT_ID: ${{ secrets.FEISHU_GITHUB_BOT_CHAT_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          PUSHER_NAME: ${{ github.event.pusher.name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMIT_SHA: ${{ github.event.after }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_USER: ${{ github.event.issue.user.login }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          set -euo pipefail
+
+          # 1. 获取 tenant_access_token
+          echo "获取 tenant_access_token..."
+          TOKEN_RESP=$(curl -s -X POST \
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal" \
+            -H "Content-Type: application/json" \
+            -d "{\"app_id\":\"${FEISHU_GITHUB_BOT_APP_ID}\",\"app_secret\":\"${FEISHU_GITHUB_BOT_APP_SECRET}\"}")
+
+          TOKEN=$(echo "$TOKEN_RESP" | jq -r '.tenant_access_token')
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::获取 tenant_access_token 失败"
+            exit 1
+          fi
+          echo "token 获取成功"
+
+          # 2. 根据事件类型构建卡片内容
+          TITLE=""
+          COLOR=""
+          URL=""
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            TITLE="📦 代码提交通知"
+            COLOR="blue"
+            SHORT_SHA="${COMMIT_SHA:0:7}"
+            MSG_FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+            BODY=$(printf '**仓库**: %s\n**推送人**: %s\n**Commit**: %s\n**Hash**: %s' "$REPO_FULL_NAME" "$PUSHER_NAME" "$MSG_FIRST_LINE" "$SHORT_SHA")
+            URL="$COMMIT_URL"
+
+          elif [ "$EVENT_NAME" = "issues" ] && [ "$EVENT_ACTION" = "opened" ]; then
+            TITLE="🐛 新建 Issue"
+            COLOR="orange"
+            BODY=$(printf '**仓库**: %s\n**Issue**: #%s %s\n**创建人**: %s' "$REPO_FULL_NAME" "$ISSUE_NUMBER" "$ISSUE_TITLE" "$ISSUE_USER")
+            URL="$ISSUE_URL"
+
+          elif [ "$EVENT_NAME" = "issues" ] && [ "$EVENT_ACTION" = "closed" ]; then
+            TITLE="✅ Issue 已关闭"
+            COLOR="green"
+            BODY=$(printf '**仓库**: %s\n**Issue**: #%s %s\n**关闭人**: %s' "$REPO_FULL_NAME" "$ISSUE_NUMBER" "$ISSUE_TITLE" "$ISSUE_USER")
+            URL="$ISSUE_URL"
+
+          elif [ "$EVENT_NAME" = "pull_request" ] && [ "$EVENT_ACTION" = "opened" ]; then
+            TITLE="🔀 新建 Pull Request"
+            COLOR="purple"
+            BODY=$(printf '**仓库**: %s\n**PR**: #%s %s\n**提交人**: %s' "$REPO_FULL_NAME" "$PR_NUMBER" "$PR_TITLE" "$PR_USER")
+            URL="$PR_URL"
+
+          elif [ "$EVENT_NAME" = "pull_request" ] && [ "$EVENT_ACTION" = "ready_for_review" ]; then
+            TITLE="👀 PR 待审查"
+            COLOR="orange"
+            BODY=$(printf '**仓库**: %s\n**PR**: #%s %s\n**提交人**: %s\n请尽快审查！' "$REPO_FULL_NAME" "$PR_NUMBER" "$PR_TITLE" "$PR_USER")
+            URL="$PR_URL"
+
+          elif [ "$EVENT_NAME" = "pull_request" ] && [ "$EVENT_ACTION" = "closed" ] && [ "$PR_MERGED" = "true" ]; then
+            TITLE="🎉 PR 已合并"
+            COLOR="green"
+            BODY=$(printf '**仓库**: %s\n**PR**: #%s %s\n**合并人**: %s' "$REPO_FULL_NAME" "$PR_NUMBER" "$PR_TITLE" "$PR_USER")
+            URL="$PR_URL"
+
+          else
+            echo "事件不需要通知，跳过"
+            exit 0
+          fi
+
+          # 3. 构建交互卡片 JSON
+          CARD=$(jq -n \
+            --arg title "$TITLE" \
+            --arg color "$COLOR" \
+            --arg body "$BODY" \
+            --arg url "$URL" \
+            '{
+              config: {wide_screen_mode: true},
+              header: {
+                title: {tag: "plain_text", content: $title},
+                template: $color
+              },
+              elements: [
+                {tag: "div", text: {tag: "lark_md", content: $body}},
+                {tag: "action", actions: [
+                  {tag: "button", text: {tag: "plain_text", content: "查看详情"}, url: $url, type: "primary"}
+                ]}
+              ]
+            }')
+
+          # 4. 发送消息（content 字段需要 stringify）
+          CONTENT=$(echo "$CARD" | jq -Rs .)
+
+          echo "发送飞书消息..."
+          SEND_RESP=$(curl -s -X POST \
+            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"receive_id\":\"${FEISHU_GITHUB_BOT_CHAT_ID}\",\"msg_type\":\"interactive\",\"content\":${CONTENT}}")
+
+          CODE=$(echo "$SEND_RESP" | jq -r '.code')
+          if [ "$CODE" != "0" ]; then
+            echo "::error::发送消息失败"
+            echo "$SEND_RESP" | jq .
+            exit 1
+          fi
+
+          echo "飞书通知发送成功！"
