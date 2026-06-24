@@ -2,6 +2,7 @@
 // 1) 拿 PR diff
 // 2) 调 minimax API 拿审查意见
 // 3) post 评论到 PR
+// 4) 发送飞书卡片通知到群聊
 import https from 'node:https';
 import { execSync } from 'node:child_process';
 
@@ -11,6 +12,9 @@ const {
   PR_NUMBER,
   REPO,
   BASE_REF,
+  FEISHU_GITHUB_BOT_APP_ID,
+  FEISHU_GITHUB_BOT_APP_SECRET,
+  FEISHU_GITHUB_BOT_CHAT_ID,
 } = process.env;
 
 function fail(msg, err) {
@@ -116,6 +120,121 @@ function postComment(text) {
   });
 }
 
+// 获取飞书 tenant_access_token
+function getFeishuToken() {
+  const body = JSON.stringify({
+    app_id: FEISHU_GITHUB_BOT_APP_ID,
+    app_secret: FEISHU_GITHUB_BOT_APP_SECRET,
+  });
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'open.feishu.cn',
+        port: 443,
+        path: '/open-apis/auth/v3/tenant_access_token/internal',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      },
+      (res) => {
+        let chunks = '';
+        res.on('data', (c) => (chunks += c));
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(chunks);
+            const token = json.tenant_access_token;
+            if (!token) return reject(new Error('获取飞书 token 失败: ' + chunks));
+            resolve(token);
+          } catch (e) {
+            reject(e);
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// 发送飞书卡片消息（AI 审查结果）
+function sendFeishuReviewCard(token, reviewText) {
+  // 截断过长内容（飞书卡片限制 30KB）
+  const MAX_LEN = 25000;
+  const truncated = reviewText.length > MAX_LEN
+    ? reviewText.slice(0, MAX_LEN) + '\n\n⚠️ 内容过长，已截断。完整内容请查看 GitHub PR 评论。'
+    : reviewText;
+
+  const card = {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: 'plain_text', content: '🤖 AI 代码审查结果' },
+      template: 'purple',
+    },
+    elements: [
+      {
+        tag: 'div',
+        text: {
+          tag: 'lark_md',
+          content: `**仓库**: ${REPO}\n**PR**: #${PR_NUMBER}\n\n${truncated}`,
+        },
+      },
+      { tag: 'hr' },
+      {
+        tag: 'action',
+        actions: [
+          {
+            tag: 'button',
+            text: { tag: 'plain_text', content: '查看 PR 详情' },
+            url: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
+            type: 'primary',
+          },
+        ],
+      },
+    ],
+  };
+
+  const content = JSON.stringify(card);
+  const body = JSON.stringify({
+    receive_id: FEISHU_GITHUB_BOT_CHAT_ID,
+    msg_type: 'interactive',
+    content: content,
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'open.feishu.cn',
+        port: 443,
+        path: '/open-apis/im/v1/messages?receive_id_type=chat_id',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      (res) => {
+        let chunks = '';
+        res.on('data', (c) => (chunks += c));
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(chunks);
+            if (json.code !== 0) {
+              console.error('飞书发送失败:', json.msg);
+              return resolve(false);
+            }
+            resolve(true);
+          } catch (e) {
+            reject(e);
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 (async () => {
   console.log('===== AI 审查开始 =====');
   console.log(`repo=${REPO} pr=${PR_NUMBER} base=${BASE_REF}`);
@@ -138,4 +257,21 @@ function postComment(text) {
 
   await postComment(review);
   console.log('===== 评论已 post =====');
+
+  // 发送飞书通知（非阻塞，失败不影响主流程）
+  if (FEISHU_GITHUB_BOT_APP_ID && FEISHU_GITHUB_BOT_APP_SECRET && FEISHU_GITHUB_BOT_CHAT_ID) {
+    try {
+      const feishuToken = await getFeishuToken();
+      const sent = await sendFeishuReviewCard(feishuToken, review);
+      if (sent) {
+        console.log('===== 飞书审查通知已发送 =====');
+      } else {
+        console.log('===== 飞书审查通知发送失败（不影响主流程）=====');
+      }
+    } catch (e) {
+      console.error('飞书通知异常（不影响主流程）:', e.message);
+    }
+  } else {
+    console.log('===== 飞书通知未配置，跳过 =====');
+  }
 })().catch((e) => fail('未捕获错误', e));
