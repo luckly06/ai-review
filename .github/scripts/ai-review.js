@@ -12,9 +12,9 @@ const {
   PR_NUMBER,
   REPO,
   BASE_REF,
-  FEISHU_GITHUB_BOT_APP_ID,
-  FEISHU_GITHUB_BOT_APP_SECRET,
-  FEISHU_GITHUB_BOT_CHAT_ID,
+  FEISHU_REVIEW_BOT_APP_ID,
+  FEISHU_REVIEW_BOT_APP_SECRET,
+  FEISHU_REVIEW_BOT_CHAT_ID,
 } = process.env;
 
 function fail(msg, err) {
@@ -123,8 +123,8 @@ function postComment(text) {
 // 获取飞书 tenant_access_token
 function getFeishuToken() {
   const body = JSON.stringify({
-    app_id: FEISHU_GITHUB_BOT_APP_ID,
-    app_secret: FEISHU_GITHUB_BOT_APP_SECRET,
+    app_id: FEISHU_REVIEW_BOT_APP_ID,
+    app_secret: FEISHU_REVIEW_BOT_APP_SECRET,
   });
   return new Promise((resolve, reject) => {
     const req = https.request(
@@ -195,7 +195,7 @@ function sendFeishuReviewCard(token, reviewText) {
 
   const content = JSON.stringify(card);
   const body = JSON.stringify({
-    receive_id: FEISHU_GITHUB_BOT_CHAT_ID,
+    receive_id: FEISHU_REVIEW_BOT_CHAT_ID,
     msg_type: 'interactive',
     content: content,
   });
@@ -259,7 +259,7 @@ function sendFeishuReviewCard(token, reviewText) {
   console.log('===== 评论已 post =====');
 
   // 发送飞书通知（非阻塞，失败不影响主流程）
-  if (FEISHU_GITHUB_BOT_APP_ID && FEISHU_GITHUB_BOT_APP_SECRET && FEISHU_GITHUB_BOT_CHAT_ID) {
+  if (FEISHU_REVIEW_BOT_APP_ID && FEISHU_REVIEW_BOT_APP_SECRET && FEISHU_REVIEW_BOT_CHAT_ID) {
     try {
       const feishuToken = await getFeishuToken();
       const sent = await sendFeishuReviewCard(feishuToken, review);

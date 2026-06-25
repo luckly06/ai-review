@@ -30,7 +30,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          FEISHU_GITHUB_BOT_APP_ID: ${{ secrets.FEISHU_GITHUB_BOT_APP_ID }}
-          FEISHU_GITHUB_BOT_APP_SECRET: ${{ secrets.FEISHU_GITHUB_BOT_APP_SECRET }}
-          FEISHU_GITHUB_BOT_CHAT_ID: ${{ secrets.FEISHU_GITHUB_BOT_CHAT_ID }}
+          FEISHU_REVIEW_BOT_APP_ID: ${{ secrets.FEISHU_REVIEW_BOT_APP_ID }}
+          FEISHU_REVIEW_BOT_APP_SECRET: ${{ secrets.FEISHU_REVIEW_BOT_APP_SECRET }}
+          FEISHU_REVIEW_BOT_CHAT_ID: ${{ secrets.FEISHU_REVIEW_BOT_CHAT_ID }}
         run: node .github/scripts/ai-review.js
