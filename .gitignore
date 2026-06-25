@@ -5,3 +5,15 @@ dist/
 *.log
 .DS_Store
 coverage/
+
+# IDE / Agent tooling configs
+.agents/
+.claude/
+.lingma/
+.qoder/
+.trae/
+skills-lock.json
+
+# Temp images
+feishu-new-app-qrcode.png
+feishu-new-app-qrcode2.png

@@ -1,0 +1,16 @@
+{
+  "name": "leave-bot",
+  "version": "1.0.0",
+  "description": "飞书请假交接机器人 - 基于 Lark CLI 事件订阅的实时请假解析与任务交接",
+  "type": "module",
+  "main": "start.js",
+  "scripts": {
+    "start": "node start.js",
+    "dev": "node --watch start.js",
+    "test": "node --test index.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}
