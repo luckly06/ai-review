@@ -99,23 +99,119 @@ async function sendFeishuMessage(token, { msgType, content }) {
 }
 
 // ============================================================
-// 2. 消息解析与风险评级
+// 2. 消息解析与风险评级（AI 优先 + 正则 fallback）
 // ============================================================
 
 /**
- * 解析请假消息
- * @param {string} content - 消息文本（已由 lark-cli 解析为纯文本，@提及已转为显示名）
- * @param {string} senderId - 发送者 open_id
- * @returns {object} 解析结果
+ * 调用 MiniMax AI（复用 ai-review.js 的调用骨架）
+ * @param {string} userPrompt - 完整 prompt（角色设定 + 消息内容）
+ * @returns {Promise<string>} AI 返回的文本
  */
-function parseLeaveMessage(content, senderId) {
-  // 检查是否包含请假关键词
-  const hasLeaveKeyword = config.leaveKeywords.some((kw) => content.includes(kw));
-  if (!hasLeaveKeyword) {
-    return null; // 不是请假消息
+function callMinimax(userPrompt) {
+  const body = JSON.stringify({
+    model: config.ai.model,
+    messages: [{ role: 'user', content: userPrompt }],
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: config.ai.endpoint,
+        port: 443,
+        path: config.ai.path,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          Authorization: `Bearer ${config.ai.apiKey}`,
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let chunks = '';
+        res.on('data', (c) => (chunks += c));
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            return reject(new Error(`MiniMax HTTP ${res.statusCode}: ${chunks}`));
+          }
+          try {
+            const json = JSON.parse(chunks);
+            const text = json.choices?.[0]?.message?.content;
+            if (!text) return reject(new Error('MiniMax 返回空内容: ' + chunks));
+            resolve(text);
+          } catch (e) {
+            reject(e);
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * 用 AI 解析请假消息
+ * @param {string} content - 消息文本
+ * @param {string} senderId - 发送者 open_id
+ * @returns {Promise<object>} parsed 对象（含 riskDesc）
+ */
+async function parseWithAI(content, senderId) {
+  const prompt =
+    '你是请假信息解析助手。从以下消息中提取请假信息，只输出 JSON，不要任何额外解释。\n\n' +
+    '字段说明：\n' +
+    '- leaveTime: 请假时间（如"明天"、"3天"、"下周一至周三"）\n' +
+    '- reason: 请假原因（如"病假"、"回家"、"出差"、"婚礼"，从消息推断，不要默认"请假"）\n' +
+    '- handoverItems: 待交接内容数组（如["P1菜单功能开发","主页渲染Bug"]）\n' +
+    '- assignee: 指定交接人姓名（无则null，注意：@机器人不是交接人）\n' +
+    '- riskLevel: 风险等级 P0/P1/P2/P3\n' +
+    '- riskDesc: 根据待交接内容动态生成的风险说明（一句话，不要套模板）\n\n' +
+    '风险评级规则：\n' +
+    '- P0: 阻塞排期、线上故障、今天/明天上线且无备份人\n' +
+    '- P1: 重要Bug、本周迭代需求、未完结P0/P1任务\n' +
+    '- P2: 日常迭代任务、常规功能开发\n' +
+    '- P3: 已提前交接、无紧急工作、例行年假\n\n' +
+    'riskDesc 示例：\n' +
+    '- 待交接是Bug → "重要Bug，需优先处理"\n' +
+    '- 待交接是功能 → "重要功能开发，本周需交付"\n' +
+    '- 待交接是排期 → "本周迭代排期，需按时完成"\n\n' +
+    '只输出JSON，格式：{"leaveTime":"","reason":"","handoverItems":[],"assignee":null,"riskLevel":"","riskDesc":""}\n\n' +
+    'MESSAGE START\n' + content + '\nMESSAGE END';
+
+  const aiText = await callMinimax(prompt);
+
+  // 提取 JSON（兼容 AI 可能包了 ```json 代码块的情况）
+  let jsonStr = aiText.trim();
+  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+  if (jsonMatch) jsonStr = jsonMatch[0];
+
+  const parsed = JSON.parse(jsonStr);
+
+  // 补全字段 + 校验
+  const validLevels = ['P0', 'P1', 'P2', 'P3'];
+  if (!validLevels.includes(parsed.riskLevel)) {
+    parsed.riskLevel = 'P2'; // 异常时降级为 P2
+  }
+  if (!Array.isArray(parsed.handoverItems)) {
+    parsed.handoverItems = parsed.handoverItems ? [String(parsed.handoverItems)] : [];
   }
 
-  // 提取请假时间
+  return {
+    senderId,
+    leaveTime: parsed.leaveTime || '未明确',
+    reason: parsed.reason || '请假',
+    handoverItems: parsed.handoverItems,
+    assignee: parsed.assignee || null,
+    riskLevel: parsed.riskLevel,
+    riskDesc: parsed.riskDesc || config.riskDescriptions[parsed.riskLevel],
+    rawContent: content,
+  };
+}
+
+/**
+ * 正则解析（AI 失败时的 fallback，从原 parseLeaveMessage 提取）
+ */
+function parseWithRegex(content, senderId) {
   const timePatterns = [
     { regex: /今天/, label: '今天' },
     { regex: /明天/, label: '明天' },
@@ -133,7 +229,6 @@ function parseLeaveMessage(content, senderId) {
     }
   }
 
-  // 提取请假原因
   const reasonPatterns = [
     { regex: /病假/, label: '病假' },
     { regex: /事假/, label: '事假' },
@@ -149,10 +244,8 @@ function parseLeaveMessage(content, senderId) {
     }
   }
 
-  // 提取待交接内容（查找 Bug、需求、任务等关键词附近的文本）
   const handoverKeywords = ['Bug', 'bug', '需求', '任务', '排期', '上线', '故障', '功能', '模块'];
   const handoverItems = [];
-  // 简单提取：按句号/逗号/换行分割，找包含关键词的片段
   const segments = content.split(/[，。,.！!？?\n]+/).filter((s) => s.trim());
   for (const seg of segments) {
     if (handoverKeywords.some((kw) => seg.includes(kw))) {
@@ -160,16 +253,12 @@ function parseLeaveMessage(content, senderId) {
     }
   }
 
-  // 提取指定交接人（@某人 或 "找某某"）
   const assigneeMatch = content.match(/(?:找|交给|联系|@)\s*([^\s，。,.！!？?]+)/);
   let assignee = assigneeMatch ? assigneeMatch[1] : null;
-
-  // 排除机器人名称（@机器人是触发机器人，不是指定交接人）
   if (assignee && (assignee === config.bot.botName || assignee.includes('_user_'))) {
     assignee = null;
   }
 
-  // 风险评级
   const riskLevel = assessRisk(content, handoverItems, assignee);
 
   return {
@@ -179,8 +268,36 @@ function parseLeaveMessage(content, senderId) {
     handoverItems,
     assignee,
     riskLevel,
+    riskDesc: config.riskDescriptions[riskLevel],
     rawContent: content,
   };
+}
+
+/**
+ * 解析请假消息（AI 优先 + 正则 fallback）
+ * @param {string} content - 消息文本
+ * @param {string} senderId - 发送者 open_id
+ * @returns {Promise<object|null>} 解析结果
+ */
+async function parseLeaveMessage(content, senderId) {
+  // 前置过滤：不含请假关键词直接返回 null（省 API 调用）
+  const hasLeaveKeyword = config.leaveKeywords.some((kw) => content.includes(kw));
+  if (!hasLeaveKeyword) {
+    return null;
+  }
+
+  // AI 解析
+  try {
+    const parsed = await parseWithAI(content, senderId);
+    console.log('[AI解析成功]');
+    return parsed;
+  } catch (err) {
+    console.error(`[AI解析失败] ${err.message}，回退正则`);
+    if (config.ai.fallbackToRegex) {
+      return parseWithRegex(content, senderId);
+    }
+    return null;
+  }
 }
 
 /**
@@ -215,56 +332,94 @@ function assessRisk(content, handoverItems, assignee) {
 
 /**
  * 构造交接卡片 JSON
+ * 参考飞书官方卡片搭建工具"任务认领"模板风格：
+ * - markdown 元素（支持更丰富的格式）
+ * - column_set 双列布局（信息分区清晰）
+ * - emoji 图标增强可读性
+ * - 风险等级用 emoji 徽章 + 颜色标题栏
  */
 function buildHandoverCard(parsed) {
-  const { reason, leaveTime, handoverItems, riskLevel, rawContent } = parsed;
+  const { reason, leaveTime, handoverItems, riskLevel } = parsed;
   const template = config.cardTemplates[riskLevel];
-  const riskDesc = config.riskDescriptions[riskLevel];
+  const riskDesc = parsed.riskDesc || config.riskDescriptions[riskLevel];
 
-  // 待交接任务文本（使用真正的换行字符）
+  // 风险等级 emoji 徽章
+  const riskEmoji = { P0: '🔴', P1: '🟠', P2: '🟡', P3: '🟢' }[riskLevel] || '⚪';
+
+  // 待交接任务列表（带 emoji 前缀）
   const taskText = handoverItems.length > 0
-    ? handoverItems.map((item) => `• ${item}`).join('\n')
+    ? handoverItems.map((item) => `🔹 ${item}`).join('\n')
     : '（未提及具体待交接内容）';
-
-  // 风险评估文本（使用真正的换行字符 \n）
-  const riskText = `**风险等级：** ${riskLevel}\n${riskDesc}`;
 
   // 交接呼叫
   const callText = parsed.assignee
-    ? `**指定交接人：** ${parsed.assignee}`
-    : '**交接呼叫：** 请有空档的同学点击下方按钮认领，或回复本消息协助跟进。';
+    ? `👤 **指定交接人：** ${parsed.assignee}`
+    : '📣 **交接呼叫：** 请有空档的同学点 ✅ 表情认领，或回复本消息协助跟进。';
 
   const elements = [
+    // 顶部：请假信息（双列布局）
     {
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: `**请假时间：** ${leaveTime}\n**请假原因：** ${reason}`,
-      },
+      tag: 'column_set',
+      flex_mode: 'bisect',
+      background_style: 'grey',
+      columns: [
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'markdown',
+            content: `📅 **请假时间**\n${leaveTime}`,
+          }],
+        },
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'markdown',
+            content: `📝 **请假原因**\n${reason}`,
+          }],
+        },
+      ],
     },
     { tag: 'hr' },
+    // 待交接任务
     {
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: `**待交接任务：**\n${taskText}`,
-      },
+      tag: 'markdown',
+      content: `📋 **待交接任务**\n${taskText}`,
     },
     { tag: 'hr' },
+    // 风险评估（双列：等级 + 描述）
     {
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: riskText,
-      },
+      tag: 'column_set',
+      flex_mode: 'bisect',
+      columns: [
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'markdown',
+            content: `${riskEmoji} **风险等级**\n${riskLevel}`,
+          }],
+        },
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'markdown',
+            content: `⚠️ **风险说明**\n${riskDesc}`,
+          }],
+        },
+      ],
     },
     { tag: 'hr' },
+    // 交接呼叫
     {
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: callText,
-      },
+      tag: 'markdown',
+      content: callText,
     },
   ];
 
@@ -272,11 +427,8 @@ function buildHandoverCard(parsed) {
   if (riskLevel === 'P0' || riskLevel === 'P1') {
     elements.push({ tag: 'hr' });
     elements.push({
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: '👆 **认领方式：** 在本条消息上点 ✅ 表情即可认领',
-      },
+      tag: 'markdown',
+      content: '👆 **认领方式：** 在本条消息上点 ✅ 表情即可认领\n\n**PC端：** 鼠标右键卡片 → 表情回复 → 找 ✅\n**手机端：** 长按该消息 → 三个点 → 找 ✅',
     });
   }
 
@@ -285,7 +437,7 @@ function buildHandoverCard(parsed) {
     header: {
       title: {
         tag: 'plain_text',
-        content: `【${riskLevel} 紧急工作交接】${reason} ${leaveTime}`,
+        content: `${riskEmoji} 【${riskLevel} 紧急工作交接】${reason} ${leaveTime}`,
       },
       template,
     },
@@ -346,7 +498,9 @@ async function createFeishuTask(parsed) {
     }
 
     // Windows 使用 spawn + shell: true
-    const proc = spawn(`lark-cli task +create --summary "${summary}" --description "${description}" --due ${dueDate} --profile leave-bot`, [], {
+    // 用 --as user 身份创建任务（bot 身份缺少 task:task:write 权限）
+    // --profile 是全局 flag，必须放在最前面
+    const proc = spawn(`lark-cli --profile leave-bot task +create --summary "${summary}" --description "${description}" --due ${dueDate} --as user`, [], {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: true,
       windowsHide: true,
@@ -462,7 +616,7 @@ async function handleReaction(rawEvent) {
   try {
     const token = await getFeishuToken();
 
-    // 用卡片消息发送认领确认（支持 lark_md 格式：加粗、@ 提及）
+    // 用卡片消息发送认领确认（与交接卡片风格一致：双列布局 + emoji 图标）
     const claimCard = {
       config: { wide_screen_mode: true },
       header: {
@@ -471,11 +625,34 @@ async function handleReaction(rawEvent) {
       },
       elements: [
         {
-          tag: 'div',
-          text: {
-            tag: 'lark_md',
-            content: `**认领人：** <at user_id="${operatorOpenId}"></at>\n**认领时间：** ${new Date().toLocaleString()}\n**交接内容：** ${claimData.leaveInfo}`,
-          },
+          tag: 'column_set',
+          flex_mode: 'bisect',
+          background_style: 'grey',
+          columns: [
+            {
+              tag: 'column',
+              width: 'weighted',
+              weight: 1,
+              elements: [{
+                tag: 'markdown',
+                content: `🙋 **认领人**\n<at user_id="${operatorOpenId}"></at>`,
+              }],
+            },
+            {
+              tag: 'column',
+              width: 'weighted',
+              weight: 1,
+              elements: [{
+                tag: 'markdown',
+                content: `🕐 **认领时间**\n${new Date().toLocaleString()}`,
+              }],
+            },
+          ],
+        },
+        { tag: 'hr' },
+        {
+          tag: 'markdown',
+          content: `📋 **交接内容**\n🔹 ${claimData.leaveInfo}`,
         },
       ],
     };
@@ -515,8 +692,8 @@ async function handleEvent(event) {
 
   console.log(`\n[${new Date().toLocaleString()}] 收到 @消息: ${content}`);
 
-  // 解析请假信息
-  const parsed = parseLeaveMessage(content, sender_id);
+  // 解析请假信息（AI 优先 + 正则 fallback）
+  const parsed = await parseLeaveMessage(content, sender_id);
 
   if (!parsed) {
     // 不是请假消息，忽略

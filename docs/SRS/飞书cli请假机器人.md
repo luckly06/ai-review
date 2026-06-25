@@ -1,5 +1,9 @@
 # 飞书 CLI 请假交接机器人
 
+> **状态：✅ 已实现并部署**（2026-06-25 验收通过，运行于华为云 ECS + PM2）
+> 代码：[scripts/leave-bot/](file:///f:/ai_agent/dev2/xiaomi/ai/test08/ai-review/scripts/leave-bot/)
+> 维护：[docs/复用/三机器人维护快速上手.md](file:///f:/ai_agent/dev2/xiaomi/ai/test08/ai-review/docs/复用/三机器人维护快速上手.md)
+
 > 基于 Lark CLI（MCP 协议）的团队请假与任务交接自动化方案。
 > 当组员请假时，AI 自动解析待交接工作、评估风险、发送交互卡片、创建飞书任务，实现无后端的轻量交接流。
 

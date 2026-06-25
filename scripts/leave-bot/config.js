@@ -56,4 +56,14 @@ export default {
 
   // 待认领消息过期时间（毫秒，30 分钟）
   claimTimeout: 30 * 60 * 1000,
+
+  // AI 解析配置（MiniMax，复用 ai-review.js 的调用模式）
+  ai: {
+    apiKey: process.env.MINIMAX_API_KEY || '',
+    model: 'MiniMax-M3',
+    endpoint: 'api.minimaxi.com',
+    path: '/v1/chat/completions',
+    // AI 解析失败时是否回退到正则
+    fallbackToRegex: true,
+  },
 };

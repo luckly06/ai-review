@@ -1,5 +1,8 @@
 # 任务：GitHub 事件自动通知到飞书群
 
+> **状态：✅ 已实现**（workflow: `.github/workflows/notify-feishu.yml`）
+> 机器人：GitHub通知Bot（App ID: `cli_aab1c52bbdb85bd6`）
+
 ## 背景
 
 仓库 `luckly06/ai-review` 已经搭建好 GitHub Projects 看板自动化（issue/PR 状态变更会自动挪动看板卡片）。现在需要补充：**GitHub 事件发生时，自动把格式化消息推送到飞书群**，让团队成员不用刷 GitHub 也能第一时间知道状态变化。
