@@ -82,11 +82,43 @@ async function sendFeishuCard(token, card) {
 }
 
 // ============================================================
+// 1b. 写操作守卫 — 纵深防御
+// ============================================================
+//
+// 即便 AI 通过 prompt injection 引导代码调 GitHub 写 API，
+// 或未来开发者手滑加了 write 调用，运行时也会直接抛错。
+//
+// 规则：
+// - REST 只允许 GET / HEAD 到 api.github.com
+// - GraphQL POST 允许（GitHub 强制），但 body 必须以 "query" 或 "mutation __safe"
+//   开头且不能含 mutation 关键字（mutation 操作目前一律拒绝）
+
+function safeGitHubRest(method, path) {
+  const m = method.toUpperCase();
+  if (!['GET', 'HEAD'].includes(m)) {
+    throw new Error(`[guard] GitHub REST ${m} ${path} 被拒：bot 只有读权限`);
+  }
+}
+
+function safeGitHubGraphQL(body) {
+  // body 是 JSON 字符串化后的 { query, variables }
+  const parsed = JSON.parse(body);
+  const q = (parsed.query || '').trim();
+  if (!/^query\b/i.test(q)) {
+    throw new Error(`[guard] GitHub GraphQL 必须是 query 操作，拒绝以 "${q.slice(0, 30)}..." 开头的请求`);
+  }
+  if (/\bmutation\b/i.test(q)) {
+    throw new Error(`[guard] GitHub GraphQL mutation 被拒：bot 没有写权限`);
+  }
+}
+
+// ============================================================
 // 2. GitHub API 调用
 // ============================================================
 
 function githubGraphQL(query, variables = {}) {
   const body = JSON.stringify({ query, variables });
+  safeGitHubGraphQL(body);  // 守卫：拒绝 mutation
   const headers = {
     'Content-Type': 'application/json',
     'User-Agent': 'ai-review-bot',
@@ -120,6 +152,7 @@ function githubGraphQL(query, variables = {}) {
 }
 
 function githubRest(path) {
+  safeGitHubRest('GET', path);  // 守卫：拒绝非 GET
   const headers = {
     'User-Agent': 'ai-review-bot',
     Authorization: `Bearer ${config.github.token}`,
@@ -510,4 +543,6 @@ export {
   buildAnswerCard,
   buildHelpCard,
   buildErrorCard,
+  safeGitHubRest,
+  safeGitHubGraphQL,
 };
