@@ -29,7 +29,9 @@ export default {
     board:  ['看板', 'board', '状态', 'kanban'],
     issue:  ['issue', 'issues', 'bug', '问题'],
     pr:     ['pr', 'pull', 'pullrequest', '拉取'],
-    ask:    ['问', 'ask', 'ai', 'ai问', 'chat'],
+    // 'ask' 现在是默认兜底（不需要关键词触发），
+    // 保留空数组防止 matchCommand 误中其他字段
+    ask:    [],
   },
 
   // AI 配置（与 leave-bot/config.js 一致；token 仅走环境变量，不落明文）

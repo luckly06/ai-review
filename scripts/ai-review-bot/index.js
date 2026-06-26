@@ -337,9 +337,10 @@ function buildHelpCard() {
           '• `@ai-review 看板` — 看 GitHub Project 各列卡片数',
           '• `@ai-review issue` — 列 open Issue（最多 10 条）',
           '• `@ai-review pr` — 列 open PR（最多 10 条）',
-          '• `@ai-review 问 xxx` — 调 MiniMax 自由回答',
+          '• 任何其他问题 — 直接 @ 我，调 MiniMax 自由回答',
           '',
-          '**触发规则**：必须 @ai-review 才会响应，其他消息忽略',
+          '**示例**：`@ai-review 这段代码啥意思` / `@ai-review 帮我写个正则`',
+          '**触发规则**：必须 @ai-review 才会响应',
         ].join('\n'),
       },
     }],
@@ -394,8 +395,16 @@ async function routeCommand(cmd) {
         }
         break;
       }
-      default:
-        card = buildHelpCard();
+      default: {
+        // 其他都走 AI 自由问答（不要求 "问" 字）
+        const question = cmd.trim();
+        if (!question) {
+          card = buildHelpCard();
+        } else {
+          card = buildAnswerCard(question, await fetchAnswer(question));
+        }
+        break;
+      }
     }
   } catch (e) {
     console.error('[route]', e.message);
