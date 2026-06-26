@@ -1,3 +1,26 @@
+###############################################################################
+# ⚠️  这是 ai-review-bot 的金标准回归样本，不要删除/不要 .gitignore
+#
+# 用途：
+#   1. 改 fetchAnswer 的 system prompt 后，重跑 deploy/test-format.py，对比本文件
+#      看 MiniMax 是否仍遵守"代码用 ``` 围栏"和"拒绝 mermaid 改说去 GitHub 看"
+#   2. 升级 MiniMax 模型 / 换 API 端点时，验证行为没回归
+#
+# 怎么重新生成：
+#   python deploy/test-format.py    # 会覆盖本文件
+#
+# 测试的两道题（固定不变，方便 diff）：
+#   Q1: "写一个 Python 函数，判断一个数是不是素数"
+#   Q2: "画一个用户登录流程的时序图"
+#
+# 校验项（在 test-format.py 里自动跑）：
+#   Q1: has fenced code block?  /  no mermaid?
+#   Q2: no mermaid block?       /  mentions GitHub?
+#
+# 历史：
+#   c811d25  初始样本（首次加飞书卡片格式约束后）
+###############################################################################
+
 === Q1: 问代码示例 ===
 --- answer ---
 判断素数可以用试除法，时间复杂度 O(√n)。代码示例：
