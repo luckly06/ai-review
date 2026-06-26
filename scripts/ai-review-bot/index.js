@@ -200,41 +200,6 @@ async function fetchPRs() {
   );
 }
 
-// README 概要（GitHub 公开仓库可匿名访问，不强制 token）
-async function fetchReadme(maxLen = 1500) {
-  const headers = {
-    'User-Agent': 'ai-review-bot',
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  };
-  if (config.github.token) headers.Authorization = `Bearer ${config.github.token}`;
-  const path = `/repos/${config.github.owner}/${config.github.repo}/readme`;
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      { hostname: 'api.github.com', port: 443, path, method: 'GET', headers },
-      (res) => {
-        let chunks = '';
-        res.on('data', (c) => (chunks += c));
-        res.on('end', () => {
-          if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}: ${chunks.slice(0, 200)}`));
-          try {
-            const meta = JSON.parse(chunks);
-            const content = Buffer.from(meta.content, 'base64').toString('utf8');
-            resolve({
-              name: meta.name,
-              size: meta.size,
-              htmlUrl: meta.html_url,
-              excerpt: content.length > maxLen ? content.slice(0, maxLen) + '\n\n…（已截断）' : content,
-            });
-          } catch (e) { reject(e); }
-        });
-      }
-    );
-    req.on('error', reject);
-    req.end();
-  });
-}
-
 // ============================================================
 // 3b. MiniMax AI 调用（参考 scripts/leave-bot/index.js L110-L151）
 // ============================================================
@@ -331,28 +296,6 @@ function buildAnswerCard(question, answer) {
   };
 }
 
-function buildReadmeCard({ name, size, htmlUrl, excerpt }) {
-  return {
-    config: { wide_screen_mode: true },
-    header: { title: { tag: 'plain_text', content: `仓库 README — ${name}` }, template: 'purple' },
-    elements: [
-      { tag: 'div', text: { tag: 'lark_md', content: `**大小**：${size} 字节\n**链接**：${htmlUrl}` } },
-      { tag: 'hr' },
-      { tag: 'div', text: { tag: 'lark_md', content: excerpt } },
-      { tag: 'hr' },
-      {
-        tag: 'action',
-        actions: [{
-          tag: 'button',
-          text: { tag: 'plain_text', content: '在 GitHub 看完整 README' },
-          url: htmlUrl,
-          type: 'primary',
-        }],
-      },
-    ],
-  };
-}
-
 function buildListCard(kind, rows, urlBase) {
   if (!rows.length) {
     return {
@@ -390,7 +333,7 @@ function buildHelpCard() {
       text: {
         tag: 'lark_md',
         content: [
-          '**当前命令（MVP）**：',
+          '**当前命令**：',
           '• `@ai-review 看板` — 看 GitHub Project 各列卡片数',
           '• `@ai-review issue` — 列 open Issue（最多 10 条）',
           '• `@ai-review pr` — 列 open PR（最多 10 条）',
@@ -439,9 +382,6 @@ async function routeCommand(cmd) {
       case 'pr':
         card = buildListCard('PR', await fetchPRs(), `${repoUrl}/pulls`);
         break;
-      case 'readme':
-        card = buildReadmeCard(await fetchReadme());
-        break;
       case 'ask': {
         const question = cmd
           .replace(new RegExp(config.commands.ask.join('|'), 'gi'), '')
@@ -472,7 +412,7 @@ export async function handleEvent(event) {
   if (event.message_type !== 'text') return;
   if (event.chat_type !== 'group') return;
   if (event.chat_id !== config.bot.chatId) return;
-  const raw = JSON.parse(event.content || '{}').text || '';
+  const raw = event.content || '';
   const mention = `@${config.bot.botName}`;
   if (!raw.includes(mention)) return;
   const cmd = raw.split(mention)[1]?.trim() || '';
@@ -547,8 +487,12 @@ export {
   fetchBoard,
   fetchIssues,
   fetchPRs,
-  fetchReadme,
   fetchAnswer,
   callMinimax,
   stripThinking,
+  buildBoardCard,
+  buildListCard,
+  buildAnswerCard,
+  buildHelpCard,
+  buildErrorCard,
 };

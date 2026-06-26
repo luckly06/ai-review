@@ -29,7 +29,6 @@ export default {
     board:  ['看板', 'board', '状态', 'kanban'],
     issue:  ['issue', 'issues', 'bug', '问题'],
     pr:     ['pr', 'pull', 'pullrequest', '拉取'],
-    readme: ['仓库', 'readme', '项目', 'repo'],
     ask:    ['问', 'ask', 'ai', 'ai问', 'chat'],
   },
 
