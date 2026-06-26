@@ -3,10 +3,13 @@ name: Notify Feishu
 on:
   push:
     branches: [main]
+    tags: ['v*']
   issues:
     types: [opened, closed]
   pull_request:
     types: [opened, closed, ready_for_review]
+  release:
+    types: [published]
 
 jobs:
   notify:
@@ -20,6 +23,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           REPO_FULL_NAME: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
           PUSHER_NAME: ${{ github.event.pusher.name }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           COMMIT_SHA: ${{ github.event.after }}
@@ -33,6 +37,12 @@ jobs:
           PR_USER: ${{ github.event.pull_request.user.login }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
+          # release 事件
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_AUTHOR: ${{ github.event.release.author.login }}
         run: |
           set -euo pipefail
 
@@ -55,13 +65,39 @@ jobs:
           COLOR=""
           URL=""
 
-          if [ "$EVENT_NAME" = "push" ]; then
-            TITLE="📦 代码提交通知"
-            COLOR="blue"
-            SHORT_SHA="${COMMIT_SHA:0:7}"
-            MSG_FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
-            BODY=$(printf '**仓库**: %s\n**推送人**: %s\n**Commit**: %s\n**Hash**: %s' "$REPO_FULL_NAME" "$PUSHER_NAME" "$MSG_FIRST_LINE" "$SHORT_SHA")
-            URL="$COMMIT_URL"
+          if [ "$EVENT_NAME" = "release" ] && [ "$EVENT_ACTION" = "published" ]; then
+            TITLE="🚀 新 Release 发布"
+            COLOR="purple"
+            RELEASE_NOTES_PREVIEW=$(printf '%s' "$RELEASE_BODY" | head -20)
+            if [ -z "$RELEASE_NOTES_PREVIEW" ]; then
+              RELEASE_NOTES_PREVIEW="(无描述)"
+            fi
+            BODY=$(printf '**仓库**: %s\n**Release**: %s\n**Tag**: `%s`\n**发布人**: %s\n\n---\n\n%s' \
+              "$REPO_FULL_NAME" "$RELEASE_NAME" "$RELEASE_TAG" "$RELEASE_AUTHOR" "$RELEASE_NOTES_PREVIEW")
+            URL="$RELEASE_URL"
+
+          elif [ "$EVENT_NAME" = "push" ]; then
+            # 区分 tag push（REF_NAME 以 v 开头）和 branch push
+            case "$REF_NAME" in
+              v*)
+                TITLE="🏷️ 新标签发布"
+                COLOR="indigo"
+                SHORT_SHA="${COMMIT_SHA:0:7}"
+                MSG_FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+                TAG_URL="https://github.com/${REPO_FULL_NAME}/releases/tag/${REF_NAME}"
+                BODY=$(printf '**仓库**: %s\n**标签**: `%s`\n**推送人**: %s\n**指向 commit**: %s\n**Hash**: %s' \
+                  "$REPO_FULL_NAME" "$REF_NAME" "$PUSHER_NAME" "$MSG_FIRST_LINE" "$SHORT_SHA")
+                URL="$TAG_URL"
+                ;;
+              *)
+                TITLE="📦 代码提交通知"
+                COLOR="blue"
+                SHORT_SHA="${COMMIT_SHA:0:7}"
+                MSG_FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+                BODY=$(printf '**仓库**: %s\n**推送人**: %s\n**Commit**: %s\n**Hash**: %s' "$REPO_FULL_NAME" "$PUSHER_NAME" "$MSG_FIRST_LINE" "$SHORT_SHA")
+                URL="$COMMIT_URL"
+                ;;
+            esac
 
           elif [ "$EVENT_NAME" = "issues" ] && [ "$EVENT_ACTION" = "opened" ]; then
             TITLE="🐛 新建 Issue"
