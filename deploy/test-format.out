@@ -1,0 +1,84 @@
+=== Q1: 问代码示例 ===
+--- answer ---
+判断素数可以用试除法，时间复杂度 O(√n)。代码示例：
+
+```python
+def is_prime(n: int) -> bool:
+    if n < 2:
+        return False
+    if n < 4:
+        return True  # 2 和 3 是素数
+    if n % 2 == 0:
+        return False
+    i = 3
+    while i * i <= n:
+        if n % i == 0:
+            return False
+        i += 2
+    return True
+```
+
+要点说明：
+• 小于 2 直接排除
+• 2 是唯一偶素数，先单独判断
+• 只需用奇数 i 从 3 试除到 √n
+• 6k±1 优化版：步长可改为 6，跳过更多合数
+
+使用示例：
+
+```python
+print(is_prime(17))  # True
+print(is_prime(18))  # False
+print([x for x in range(2, 30) if is_prime(x)])
+# [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
+```
+
+提示：本回答仅展示代码片段，未写入任何文件。如需运行或落盘，请用 Claude Code 或自行操作。
+--- check ---
+has fenced code block? true
+no mermaid? true
+
+=== Q2: 问 Mermaid ===
+--- answer ---
+用户登录流程时序图（纯文本版）：
+
+```
+用户              前端              后端              数据库
+ |                |                 |                 |
+ |---输入账号密码->|                 |                 |
+ |                |---POST /login--->|                 |
+ |                |                 |---查询用户------>|
+ |                |                 |<--返回用户数据----|
+ |                |                 |                 |
+ |                |                 |---验证密码(hash)--|
+ |                |                 |---生成JWT--------|
+ |                |                 |---存session/缓存-->|
+ |                |                 |                 |
+ |                |<--200 + token----|                 |
+ |<--跳转首页-----|                 |                 |
+ |                |                 |                 |
+ |---访问其他页面->|                 |                 |
+ |                |---GET /api+token>|                 |
+ |                |                 |---验证token----->|
+ |                |                 |<--用户信息-------|
+ |                |<--200 + data----|                 |
+ |<--渲染页面-----|                 |                 |
+```
+
+**流程要点：**
+• 鉴权方式：JWT（无状态）或 Session（有状态）
+• 密码传输：HTTPS + bcrypt 哈希存储
+• 防刷：限流 + 验证码
+• Token 存储：前端用 httpOnly Cookie 防 XSS
+
+图表请去 https://github.com/luckly06/ai-review 查看
+
+---
+
+**我能干嘛（内置命令）：**
+• `@ai-review 看板` — 看 GitHub Project 各列卡片数
+• `@ai-review issue` — 列 open Issue（最多 10 条）
+• `@ai-review pr` — 列 open PR（最多 10 条）
+--- check ---
+no mermaid block? true
+mentions GitHub? true
