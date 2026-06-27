@@ -70,7 +70,11 @@ async function sendFeishuCard(token, card) {
         res.on('end', () => {
           try {
             const json = JSON.parse(resBody);
-            resolve(json.code === 0);
+            if (json.code !== 0) {
+              console.error('[feishu-send]', JSON.stringify(json));
+              return resolve(false);
+            }
+            resolve(true);
           } catch (e) { reject(e); }
         });
       }
@@ -291,8 +295,13 @@ function callMinimax(prompt) {
   });
 }
 
-async function fetchAnswer(question) {
+async function fetchAnswer(question, ctx = '') {
   requireMinimax();
+  const ctxPart = ctx
+    ? '\n以下是与用户问题相关的上下文数据，请基于此评注：\n' +
+      (ctx.length > 5000 ? ctx.slice(0, 5000) + '\n...（已截断）' : ctx) +
+      '\n'
+    : '';
   const prompt =
     '你是 ai-review 助手，回答要简洁（中文）。\n' +
     '你的能力范围：回答问题、解释概念、写示例代码片段（只展示、不落盘）。\n' +
@@ -315,6 +324,7 @@ async function fetchAnswer(question) {
     '3. 调用 GitHub API 去改仓库内容\n' +
     '如果用户要求做上述事情，明确拒绝并告诉他去找 Claude Code 或自己来。\n' +
     '用户问的是项目相关问题（仓库 luckly06/ai-review），可以直接基于常识回答。\n\n' +
+    ctxPart +
     '用户问题：' + question;
   return callMinimax(prompt);
 }
@@ -332,14 +342,14 @@ function buildBoardCard({ title, buckets }) {
   };
 }
 
-function buildAnswerCard(question, answer) {
+function buildAnswerCard(question, answer, headerTitle = 'AI 回答') {
   const MAX = 25000;
   const text = answer.length > MAX
     ? answer.slice(0, MAX) + '\n\n⚠️ 内容过长，已截断。'
     : answer;
   return {
     config: { wide_screen_mode: true },
-    header: { title: { tag: 'plain_text', content: 'AI 回答' }, template: 'blue' },
+    header: { title: { tag: 'plain_text', content: headerTitle }, template: 'blue' },
     elements: [
       { tag: 'div', text: { tag: 'lark_md', content: `**问**：${question}` } },
       { tag: 'hr' },
@@ -408,6 +418,26 @@ function buildErrorCard(err) {
 }
 
 // ============================================================
+// 4b. 双卡发送 helper — 先发数据卡（同步），再异步发 AI 评注卡（fire-and-forget）
+// ============================================================
+//
+// 设计意图：
+// - 第一张失败就不发第二张——避免 AI 凭空评注无数据的问题
+// - 第二张 catch 只打日志，不回发错误卡——避免三连击刷屏
+// - 不 await 第二张——handleEvent 不被卡住，下条消息能立刻进 routeCommand
+
+async function sendDualCard(token, dataCard, ctxText, cmd, headerTitle) {
+  const ok = await sendFeishuCard(token, dataCard);
+  if (!ok) {
+    console.error('[dual-card] 第一张数据卡发送失败，跳过 AI 评注。cmd=', cmd);
+    return;
+  }
+  fetchAnswer(cmd, ctxText)
+    .then((ans) => sendFeishuCard(token, buildAnswerCard(cmd, ans, headerTitle)))
+    .catch((e) => console.error('[ai-followup]', e.message));
+}
+
+// ============================================================
 // 5. 命令路由
 // ============================================================
 
@@ -426,15 +456,23 @@ async function routeCommand(cmd) {
   let card;
   try {
     switch (matched) {
-      case 'board':
-        card = buildBoardCard(await fetchBoard());
-        break;
+      case 'board': {
+        const data = await fetchBoard();
+        const ctx = `看板数据快照（来源：${data.title}）：\n${JSON.stringify(data.buckets)}`;
+        sendDualCard(token, buildBoardCard(data), ctx, cmd, '看板评注');
+        return;
+      }
       case 'issue':
+        // Issue 列表本身就是结构化数据，AI 复读无价值，保持单卡
         card = buildListCard('Issue', await fetchIssues(), `${repoUrl}/issues`);
         break;
-      case 'pr':
-        card = buildListCard('PR', await fetchPRs(), `${repoUrl}/pulls`);
-        break;
+      case 'pr': {
+        const rows = await fetchPRs();
+        const ctx = `当前 open PR（共 ${rows.length} 条）：\n` +
+          rows.slice(0, 5).map((r) => `- #${r.number} ${r.title}`).join('\n');
+        sendDualCard(token, buildListCard('PR', rows, `${repoUrl}/pulls`), ctx, cmd, 'PR 评注');
+        return;
+      }
       case 'ask': {
         const question = cmd
           .replace(new RegExp(config.commands.ask.join('|'), 'gi'), '')
@@ -543,6 +581,7 @@ export function startEventListener() {
 export {
   getFeishuToken,
   sendFeishuCard,
+  sendDualCard,
   routeCommand,
   matchCommand,
   fetchBoard,
